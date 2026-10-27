@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#075e54">
+  <title>สแกนบาร์โค้ดหลอด CBC</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    :root { color-scheme: light; --teal:#087f72; --dark:#075e54; --bg:#f3f7f7; --danger:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:#123; }
+    header { background:linear-gradient(135deg,#075e54,#0d9488); color:white; padding:20px 18px 18px; }
+    header h1 { margin:0 0 6px; font-size:22px; }
+    header p { margin:0; opacity:.92; font-size:14px; line-height:1.5; }
+    main { max-width:640px; margin:0 auto; padding:16px; }
+    .card { background:white; border-radius:18px; padding:16px; box-shadow:0 4px 18px #0f766e15; }
+    #reader { width:100%; overflow:hidden; border-radius:12px; }
+    #reader video { object-fit:cover; }
+    .buttons { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+    button,.file-label { border:0; border-radius:12px; padding:13px 16px; font-size:16px; font-weight:700; cursor:pointer; min-height:48px; }
+    .primary { background:var(--teal); color:white; flex:1; }
+    .secondary { background:#e0f2f1; color:var(--dark); }
+    .danger { background:#fee2e2; color:var(--danger); }
+    .hint { background:#f0fdfa; border:1px solid #99f6e4; border-radius:12px; padding:12px; line-height:1.55; font-size:14px; margin-top:14px; }
+    #status { margin-top:12px; line-height:1.55; overflow-wrap:anywhere; }
+    #result { font-size:24px; font-weight:800; letter-spacing:.4px; overflow-wrap:anywhere; padding:12px; border:1px dashed #0d9488; border-radius:10px; margin-top:12px; display:none; }
+    #imageFile { display:none; }
+    .small { font-size:12px; color:#64748b; margin-top:12px; line-height:1.5; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>สแกนบาร์โค้ดหลอด CBC</h1>
+  <p>เปิดกล้องหลัง จัดบาร์โค้ดให้อยู่ในกรอบ แล้วระบบจะส่งเลขกลับไปยังหน้าบันทึก</p>
+</header>
+<main>
+  <section class="card">
+    <div id="reader"></div>
+    <div class="buttons">
+      <button id="startButton" class="primary" type="button">📷 เริ่มสแกนด้วยกล้องหลัง</button>
+      <button id="stopButton" class="secondary" type="button" disabled>หยุดกล้อง</button>
+    </div>
+    <div class="buttons">
+      <label for="imageFile" class="file-label secondary">🖼️ เลือกภาพบาร์โค้ดแทน</label>
+      <input id="imageFile" type="file" accept="image/*" capture="environment">
+      <button id="copyButton" class="secondary" type="button" style="display:none">คัดลอกเลข</button>
+      <button id="sendAgainButton" class="secondary" type="button" style="display:none">ส่งเลขกลับอีกครั้ง</button>
+    </div>
+    <div id="status" role="status" aria-live="polite">กรุณาแตะ “เริ่มสแกนด้วยกล้องหลัง” เพื่ออนุญาตให้ Safari ใช้กล้อง</div>
+    <div id="result"></div>
+    <div class="hint"><b>เคล็ดลับสำหรับหลอด CBC</b><br>ให้เห็นเส้นบาร์โค้ดครบทั้งซ้ายและขวา ถือมือถือให้ภาพนิ่ง มีแสงพอ และเอียงหลอดเล็กน้อยเพื่อลดแสงสะท้อน หลีกเลี่ยงนิ้วบังเส้นบาร์โค้ด</div>
+    <div class="small">ภาพที่เลือกจะถูกประมวลผลในเบราว์เซอร์ ไม่ได้อัปโหลดไปยัง Google Sheets หรือส่งไปเก็บบนเซิร์ฟเวอร์โดยหน้านี้</div>
+  </section>
+</main>
+<script>
+(() => {
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+  const startButton = document.getElementById('startButton');
+  const stopButton = document.getElementById('stopButton');
+  const imageFile = document.getElementById('imageFile');
+  const copyButton = document.getElementById('copyButton');
+  const sendAgainButton = document.getElementById('sendAgainButton');
+
+  const formats = [
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+    Html5QrcodeSupportedFormats.CODE_93,
+    Html5QrcodeSupportedFormats.ITF,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.CODABAR
+  ];
+  let scanner = null;
+  let scanning = false;
+  let accepted = false;
+  let latestBarcode = '';
+
+  function setStatus(text) { statusEl.textContent = text; }
+
+  function getFriendlyError(error) {
+    const name = error && error.name ? error.name : '';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      return 'Safari ยังไม่ได้รับอนุญาตให้ใช้กล้อง: เปิดหน้านี้ใน Safari โดยตรง แล้วแตะ aA ที่แถบที่อยู่ > การตั้งค่าเว็บไซต์ > กล้อง > อนุญาต จากนั้นปิดแท็บสแกนและเปิดใหม่';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'ไม่พบกล้องบนอุปกรณ์นี้ กรุณาตรวจสอบกล้องหรือใช้การเลือกภาพแทน';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+      return 'กล้องอาจกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปกล้อง/วิดีโออื่นแล้วลองอีกครั้ง';
+    }
+    return 'เปิดกล้องไม่สำเร็จ: ' + (error && error.message ? error.message : String(error || 'ไม่ทราบสาเหตุ'));
+  }
+
+  async function ensureScanner() {
+    if (!scanner) scanner = new Html5Qrcode('reader', { verbose: false, formatsToSupport: formats });
+    return scanner;
+  }
+
+  async function stopCamera() {
+    if (scanner && scanning) {
+      try { await scanner.stop(); } catch (e) { /* กล้องอาจหยุดไปแล้ว */ }
+      scanning = false;
+    }
+    stopButton.disabled = true;
+    startButton.disabled = false;
+  }
+
+  function sendBarcode(value) {
+    latestBarcode = String(value || '').trim();
+    if (!latestBarcode) return;
+    resultEl.textContent = latestBarcode;
+    resultEl.style.display = 'block';
+    copyButton.style.display = 'inline-block';
+    sendAgainButton.style.display = 'inline-block';
+
+    let sent = false;
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: 'KPH_BARCODE_SCANNED', barcode: latestBarcode }, '*');
+        sent = true;
+      }
+    } catch (e) { /* แสดงผลให้คัดลอกเองได้ด้านล่าง */ }
+
+    if (sent) {
+      setStatus('อ่านบาร์โค้ดได้แล้ว: ' + latestBarcode + ' — ส่งกลับหน้าบันทึกแล้ว หากหน้าหลักไม่เติมเลข ให้แตะ “ส่งเลขกลับอีกครั้ง” หรือคัดลอกเลข');
+    } else {
+      setStatus('อ่านบาร์โค้ดได้แล้ว แต่ไม่พบหน้าบันทึกที่เปิดหน้านี้ไว้ กรุณาคัดลอกเลขด้านล่างแล้วนำไปวางในช่อง Barcode');
+    }
+  }
+
+  async function startCamera() {
+    if (!window.isSecureContext) {
+      setStatus('หน้าสแกนต้องเปิดจากเว็บ HTTPS เช่น GitHub Pages เพื่อใช้กล้อง');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('เบราว์เซอร์นี้ไม่รองรับการเปิดกล้องจากหน้าเว็บ กรุณาเปิดลิงก์นี้ใน Safari โดยตรง หรือเลือกภาพบาร์โค้ดแทน');
+      return;
+    }
+    accepted = false;
+    startButton.disabled = true;
+    setStatus('กำลังขออนุญาตกล้อง โปรดกด Allow/อนุญาต หากมีข้อความถาม');
+    try {
+      await ensureScanner();
+      await scanner.start(
+        { facingMode: 'environment' },
+        {
+          fps: 12,
+          aspectRatio: 1.5,
+          qrbox: (viewWidth, viewHeight) => ({
+            width: Math.max(140, Math.min(Math.floor(viewWidth * 0.92), 520)),
+            height: Math.max(90, Math.min(Math.floor(viewHeight * 0.38), 190))
+          }),
+          rememberLastUsedCamera: true
+        },
+        async decodedText => {
+          if (accepted) return;
+          accepted = true;
+          await stopCamera();
+          sendBarcode(decodedText);
+        },
+        () => { /* ยังไม่พบโค้ดในเฟรมนี้ ให้สแกนต่อ */ }
+      );
+      scanning = true;
+      stopButton.disabled = false;
+      startButton.disabled = true;
+      setStatus('กำลังสแกน… ขยับกล้องช้า ๆ ให้เส้นบาร์โค้ดอยู่ในกรอบ');
+    } catch (error) {
+      scanning = false;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      setStatus(getFriendlyError(error));
+    }
+  }
+
+  startButton.addEventListener('click', startCamera);
+  stopButton.addEventListener('click', async () => {
+    await stopCamera();
+    setStatus('หยุดกล้องแล้ว แตะเริ่มสแกนเมื่อต้องการลองอีกครั้ง');
+  });
+  sendAgainButton.addEventListener('click', () => {
+    if (latestBarcode) sendBarcode(latestBarcode);
+  });
+  copyButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(latestBarcode);
+      setStatus('คัดลอกเลขบาร์โค้ดแล้ว: ' + latestBarcode);
+    } catch (e) {
+      const range = document.createRange();
+      range.selectNodeContents(resultEl);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      setStatus('เลือกเลขบาร์โค้ดไว้แล้ว กดคัดลอก (Copy) ได้เลย');
+    }
+  });
+
+  imageFile.addEventListener('change', async event => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    try {
+      setStatus('กำลังอ่านบาร์โค้ดจากภาพในเครื่อง…');
+      await ensureScanner();
+      if (scanning) await stopCamera();
+      const decoded = await scanner.scanFile(file, true);
+      sendBarcode(decoded);
+    } catch (error) {
+      setStatus('อ่านบาร์โค้ดจากภาพไม่สำเร็จ ลองถ่ายใหม่ให้เห็นเส้นทุกเส้นชัดเจน ไม่เอียงหรือสะท้อนแสง หรือใช้กล้องสดแทน');
+    } finally {
+      imageFile.value = '';
+    }
+  });
+
+  window.addEventListener('pagehide', () => { stopCamera(); });
+})();
+</script>
+</body>
+</html>
